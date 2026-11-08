@@ -1,23 +1,27 @@
-
-from py_agent_harness.config import API_MODEL
-from py_agent_harness.tools import BASH_TOOL
+from py_agent_harness.tools import TOOL_SCHEMAS
 
 
 def call_client(client, model, messages):
+    if not model:
+        raise ValueError("model is required")
+
     response = client.chat.completions.create(
         model=model,
         messages=messages,
-        tools=[BASH_TOOL],
+        tools=TOOL_SCHEMAS,
     )
 
-    message = response.choices[0].message
+    if not response.choices:
+        raise RuntimeError("The API returned no completion choices")
 
-    completion_details = response.usage.completion_tokens_details
-    prompt_details = response.usage.prompt_tokens_details
+    message = response.choices[0].message
+    usage_info = getattr(response, "usage", None)
+    completion_details = getattr(usage_info, "completion_tokens_details", None)
+    prompt_details = getattr(usage_info, "prompt_tokens_details", None)
 
     usage = {
-        "prompt_tokens": response.usage.prompt_tokens,
-        "completion_tokens": response.usage.completion_tokens,
+        "prompt_tokens": getattr(usage_info, "prompt_tokens", 0),
+        "completion_tokens": getattr(usage_info, "completion_tokens", 0),
         "reasoning_tokens": getattr(completion_details, "reasoning_tokens", None),
         "cached_tokens": getattr(prompt_details, "cached_tokens", None),
     }

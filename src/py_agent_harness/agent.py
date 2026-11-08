@@ -4,46 +4,74 @@ import os
 
 from openai import OpenAI
 
-from py_agent_harness.config import API_KEY, API_MODEL, BASE_URL
+from py_agent_harness.config import get_runtime_config
 from py_agent_harness.llm import call_client
+from py_agent_harness.skills import skills_prompt
 from py_agent_harness.tools import TOOLS
 
 
-client = OpenAI(
-    api_key=API_KEY, 
-    base_url=BASE_URL
-)
-
-user_input = input("Enter your prompt: ")
-
-SYSTEM_PROMPT = f"""
+def build_system_prompt() -> str:
+    return f"""
 You are a coding agent. Your job is to code. Always code.
 Use the bash tool to inspect files.
 Answer back to the user once exploration is done.
 
 Your current working directory is {os.getcwd()}.
+
+You have skills available. Each is a set of instructions for a task.
+If a skill is relevant to the user prompt, use the read_skill tool to read it and follow it.
+
+{skills_prompt()}
 """
 
-messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_input}
+
+def run_agent(prompt: str, max_turns: int = 12) -> None:
+    runtime_config = get_runtime_config()
+    client = OpenAI(
+        api_key=runtime_config["API_KEY"],
+        base_url=runtime_config["BASE_URL"],
+    )
+    messages = [
+        {"role": "system", "content": build_system_prompt()},
+        {"role": "user", "content": prompt},
     ]
 
-while True:
-    message, usage = call_client(client, API_MODEL, messages)
-    messages.append(message.model_dump(exclude_none=True))
+    for _ in range(max_turns):
+        message, usage = call_client(client, runtime_config["API_MODEL"], messages)
+        messages.append(message.model_dump(exclude_none=True))
 
-    if message.content:
-        print("\nAgent: {}\n".format(message.content))
+        if message.content:
+            print("\nAgent: {}\n".format(message.content))
 
-    if not message.tool_calls:
-        break
+        if not message.tool_calls:
+            break
 
-    if message.tool_calls:
         print("\nTool Calls:\n")
         for tool_call in message.tool_calls:
             command = tool_call.function.name
-            arguments = json.loads(tool_call.function.arguments)
+            raw_arguments = tool_call.function.arguments or "{}"
+
+            try:
+                arguments = json.loads(raw_arguments)
+            except json.JSONDecodeError as exc:
+                error = f"Invalid JSON arguments: {exc}"
+            else:
+                error = None
+
+            if error is None and not isinstance(arguments, dict):
+                error = "Tool arguments must be a JSON object"
+            if error is None and command not in TOOLS:
+                error = f"Unknown tool: {command}"
+
+            if error is not None:
+                print(f"  {error}\n")
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": json.dumps({"error": error}),
+                })
+                continue
+
             result = TOOLS[command](**arguments)
             print("  Tool: {} {} \n".format(command, arguments))
             print("  Output: {}\n".format(result))
@@ -51,11 +79,19 @@ while True:
             messages.append({
                 "role": "tool",
                 "tool_call_id": tool_call.id,
-                "content": result
+                "content": result,
             })
 
-    print("\nUsage:")
-    for category, tokens in usage.items():
-        print("  {}: {}\n".format(category.replace('_', ' ').title(), tokens))
+        tokens_usage = []
+        tokens_usage.extend(
+            "  {} {} ".format(tokens, category.split('_')[0])
+            for category, tokens in (usage or {}).items()
+        )
+        print("\nUsage: {}\n".format(" . ".join(tokens_usage)))
+    else:
+        print("\nAgent stopped after reaching the maximum tool-call budget.\n")
 
 
+if __name__ == "__main__":
+    user_input = input("Enter your prompt: ")
+    run_agent(user_input)
