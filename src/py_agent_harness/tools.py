@@ -1,6 +1,8 @@
 import subprocess
 
+from py_agent_harness.context import check_if_updated
 from py_agent_harness.skills import read_skill
+from py_agent_harness.tasks import TaskProfile, create_task_profiles
 
 
 def bash(command: str, timeout: int = 30) -> str:
@@ -29,7 +31,9 @@ def read_file(file_path: str) -> str:
     """Read the contents of a file and return it as a string."""
     try:
         with open(file_path, "r", encoding="utf-8") as file:
-            return file.read()
+            content = file.read()
+        check_if_updated(file_path)
+        return content
     except Exception as exc:  # pragma: no cover - defensive logging is handled by callers
         return f"Error reading file: {exc}"
 
@@ -117,6 +121,19 @@ def replace_at_index(file_path:str, old_str:str, new_str:str, index:int) -> str:
         return f"Successfully replaced occurrence {index} of '{old_str}' with '{new_str}' in {file_path}"
     except Exception as exc:  # pragma: no cover - defensive logging is handled by callers
         return f"Error replacing string in file: {exc}"
+
+
+def create_tasks(tasks: list[dict[str, str]]) -> str:
+    """Create task profiles from tool-provided task objects."""
+    if not tasks:
+        return "Error: tasks list cannot be empty"
+    try:
+        task_profiles = [TaskProfile(**task) for task in tasks]
+    except (TypeError, ValueError) as exc:
+        return f"Error creating tasks: {exc}"
+
+    return create_task_profiles(task_profiles)
+
 
 TOOL_SCHEMAS = [
     {
@@ -278,6 +295,40 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_tasks",
+            "description": "Create a task list when handling multiple tasks in a single prompt.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tasks": {
+                        "type": "array",
+                        "description": "Tasks to create. A non-empty list must contain exactly one active task.",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "content": {
+                                    "type": "string",
+                                    "description": "The task description and text shown in the task list.",
+                                },
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["pending", "active", "done"],
+                                    "description": "The task status.",
+                                },
+                            },
+                            "required": ["content", "status"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "required": ["tasks"],
+            },
+        },
+    }
 ]
 
 TOOLS = {
@@ -287,5 +338,6 @@ TOOLS = {
     "write_file": write_file,
     "replace_once": replace_once,
     "replace_all": replace_all,
-    "replace_at_index": replace_at_index
+    "replace_at_index": replace_at_index,
+    "create_tasks": create_tasks,
 }
